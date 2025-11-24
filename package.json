@@ -1,0 +1,24 @@
+{
+  "name": "tennis-matchmaker-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for matching tennis players by skill level and availability",
+  "main": "api/webhook.js",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod",
+    "setup-webhook": "node scripts/setup-webhook.js",
+    "create-db": "node scripts/create-db.js"
+  },
+  "dependencies": {
+    "@vercel/postgres": "^0.5.1",
+    "node-telegram-bot-api": "^0.64.0"
+  },
+  "devDependencies": {
+    "vercel": "^32.5.0",
+    "dotenv": "^16.3.1"
+  },
+  "engines": {
+    "node": ">=18.x"
+  }
+}
