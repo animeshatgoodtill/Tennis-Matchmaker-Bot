@@ -269,18 +269,23 @@ async function updateAvailabilityMessage(message, userId, dayIndex) {
 
 async function saveUserProfile(chatId, userId, userState) {
   try {
+    console.log('Saving profile for user:', userId);
+    console.log('User state:', JSON.stringify(userState));
+
     // Save to database
     await sql`
       INSERT INTO players (telegram_id, username, skill_level, availability, active)
-      VALUES (${userId}, ${userState.username}, ${userState.skill}, ${JSON.stringify(userState.availability)}, true)
-      ON CONFLICT (telegram_id) 
-      DO UPDATE SET 
-        username = ${userState.username},
+      VALUES (${userId}, ${userState.username || null}, ${userState.skill}, ${JSON.stringify(userState.availability || [])}, true)
+      ON CONFLICT (telegram_id)
+      DO UPDATE SET
+        username = ${userState.username || null},
         skill_level = ${userState.skill},
-        availability = ${JSON.stringify(userState.availability)},
+        availability = ${JSON.stringify(userState.availability || [])},
         active = true,
         updated_at = NOW()
     `;
+
+    console.log('Profile saved successfully');
     
     // Find matches
     const matches = await findMatches(userId, userState.skill, userState.availability);
@@ -298,8 +303,9 @@ Use /remove to delete your data`);
     
     userStates.delete(userId);
   } catch (error) {
-    console.error('Error saving profile:', error);
-    await bot.sendMessage(chatId, 'Sorry, there was an error saving your profile. Please try again.');
+    console.error('Error saving profile:', error.message);
+    console.error('Full error:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+    await bot.sendMessage(chatId, `Sorry, there was an error saving your profile: ${error.message}`);
   }
 }
 
