@@ -3,9 +3,6 @@ import { sql } from '@vercel/postgres';
 
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN);
 
-// User states for conversation flow
-const userStates = new Map();
-
 // Skill levels
 const SKILL_LEVELS = ['beginner', 'medium', 'advanced', 'pro'];
 
@@ -20,20 +17,54 @@ const TIME_SLOTS = {
   'Sunday': ['8-10am', '10am-12pm', '12-2pm', '2-4pm', '4-6pm', '6-8pm']
 };
 
+// Database-backed session management
+async function getSession(userId) {
+  try {
+    const { rows } = await sql`
+      SELECT state FROM user_sessions WHERE telegram_id = ${userId}
+    `;
+    return rows.length > 0 ? rows[0].state : {};
+  } catch (error) {
+    console.error('Error getting session:', error);
+    return {};
+  }
+}
+
+async function setSession(userId, state) {
+  try {
+    await sql`
+      INSERT INTO user_sessions (telegram_id, state, updated_at)
+      VALUES (${userId}, ${JSON.stringify(state)}, NOW())
+      ON CONFLICT (telegram_id)
+      DO UPDATE SET state = ${JSON.stringify(state)}, updated_at = NOW()
+    `;
+  } catch (error) {
+    console.error('Error setting session:', error);
+  }
+}
+
+async function deleteSession(userId) {
+  try {
+    await sql`DELETE FROM user_sessions WHERE telegram_id = ${userId}`;
+  } catch (error) {
+    console.error('Error deleting session:', error);
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   const update = req.body;
-  
+
   try {
     if (update.message) {
       await handleMessage(update.message);
     } else if (update.callback_query) {
       await handleCallbackQuery(update.callback_query);
     }
-    
+
     res.status(200).json({ ok: true });
   } catch (error) {
     console.error('Error handling update:', error);
@@ -58,8 +89,8 @@ async function handleMessage(message) {
 }
 
 async function startCommand(chatId, userId, username) {
-  // Initialize user state
-  userStates.set(userId, { 
+  // Initialize user state in database
+  await setSession(userId, {
     step: 'consent',
     username: username,
     availability: []
@@ -91,8 +122,9 @@ async function handleCallbackQuery(callbackQuery) {
   const chatId = callbackQuery.message.chat.id;
   const userId = callbackQuery.from.id;
   const data = callbackQuery.data;
-  
-  const userState = userStates.get(userId) || {};
+
+  // Get state from database
+  const userState = await getSession(userId);
 
   // Answer callback to remove loading state
   await bot.answerCallbackQuery(callbackQuery.id);
@@ -100,62 +132,62 @@ async function handleCallbackQuery(callbackQuery) {
   if (data === 'consent_yes') {
     userState.step = 'skill_level';
     userState.consent = true;
-    userStates.set(userId, userState);
+    await setSession(userId, userState);
     await askSkillLevel(chatId);
-    
+
   } else if (data === 'consent_no') {
     await bot.sendMessage(chatId, 'No problem! If you change your mind, just send /start again.');
-    userStates.delete(userId);
-    
+    await deleteSession(userId);
+
   } else if (data.startsWith('skill_')) {
     const skill = data.replace('skill_', '');
     userState.skill = skill;
     userState.step = 'availability';
     userState.currentDay = 0;
-    userStates.set(userId, userState);
+    await setSession(userId, userState);
     await askAvailability(chatId, userId, 0);
-    
+
   } else if (data.startsWith('day_')) {
     // Handle day/time selection
     const [_, dayIndex, ...timeParts] = data.split('_');
     const timeSlot = timeParts.join('_');
     const day = Object.keys(TIME_SLOTS)[dayIndex];
-    
+
     // Toggle slot selection
     const slotKey = `${day}_${timeSlot}`;
     if (!userState.availability) userState.availability = [];
-    
+
     const slotIndex = userState.availability.indexOf(slotKey);
     if (slotIndex > -1) {
       userState.availability.splice(slotIndex, 1);
     } else {
       userState.availability.push(slotKey);
     }
-    
-    userStates.set(userId, userState);
-    
+
+    await setSession(userId, userState);
+
     // Update message with current selections
     await updateAvailabilityMessage(callbackQuery.message, userId, parseInt(dayIndex));
-    
+
   } else if (data === 'next_day') {
     const nextDay = (userState.currentDay || 0) + 1;
     if (nextDay < Object.keys(TIME_SLOTS).length) {
       userState.currentDay = nextDay;
-      userStates.set(userId, userState);
+      await setSession(userId, userState);
       await askAvailability(chatId, userId, nextDay);
     } else {
       // Finished - save to database
       await saveUserProfile(chatId, userId, userState);
     }
-    
+
   } else if (data === 'prev_day') {
     const prevDay = (userState.currentDay || 0) - 1;
     if (prevDay >= 0) {
       userState.currentDay = prevDay;
-      userStates.set(userId, userState);
+      await setSession(userId, userState);
       await askAvailability(chatId, userId, prevDay);
     }
-    
+
   } else if (data === 'finish_availability') {
     await saveUserProfile(chatId, userId, userState);
   }
@@ -183,26 +215,26 @@ Choose the one that best describes your current skill:`;
 async function askAvailability(chatId, userId, dayIndex) {
   const days = Object.keys(TIME_SLOTS);
   const day = days[dayIndex];
-  const userState = userStates.get(userId);
-  
+  const userState = await getSession(userId);
+
   const message = `📅 Select your available time slots for *${day}*:
-  
+
 Tap on time slots when you're available to play. Selected slots will have a ✅ mark.`;
 
   const keyboard = [];
-  
+
   // Create time slot buttons
   TIME_SLOTS[day].forEach(slot => {
     const slotKey = `${day}_${slot}`;
     const isSelected = userState.availability && userState.availability.includes(slotKey);
     const buttonText = isSelected ? `✅ ${slot}` : slot;
-    
-    keyboard.push([{ 
-      text: buttonText, 
-      callback_data: `day_${dayIndex}_${slot}` 
+
+    keyboard.push([{
+      text: buttonText,
+      callback_data: `day_${dayIndex}_${slot}`
     }]);
   });
-  
+
   // Navigation buttons
   const navButtons = [];
   if (dayIndex > 0) {
@@ -214,7 +246,7 @@ Tap on time slots when you're available to play. Selected slots will have a ✅ 
     navButtons.push({ text: '✅ Finish', callback_data: 'finish_availability' });
   }
   keyboard.push(navButtons);
-  
+
   const options = {
     reply_markup: {
       inline_keyboard: keyboard
@@ -228,22 +260,22 @@ Tap on time slots when you're available to play. Selected slots will have a ✅ 
 async function updateAvailabilityMessage(message, userId, dayIndex) {
   const days = Object.keys(TIME_SLOTS);
   const day = days[dayIndex];
-  const userState = userStates.get(userId);
-  
+  const userState = await getSession(userId);
+
   const keyboard = [];
-  
+
   // Create time slot buttons with updated selection state
   TIME_SLOTS[day].forEach(slot => {
     const slotKey = `${day}_${slot}`;
     const isSelected = userState.availability && userState.availability.includes(slotKey);
     const buttonText = isSelected ? `✅ ${slot}` : slot;
-    
-    keyboard.push([{ 
-      text: buttonText, 
-      callback_data: `day_${dayIndex}_${slot}` 
+
+    keyboard.push([{
+      text: buttonText,
+      callback_data: `day_${dayIndex}_${slot}`
     }]);
   });
-  
+
   // Navigation buttons
   const navButtons = [];
   if (dayIndex > 0) {
@@ -255,7 +287,7 @@ async function updateAvailabilityMessage(message, userId, dayIndex) {
     navButtons.push({ text: '✅ Finish', callback_data: 'finish_availability' });
   }
   keyboard.push(navButtons);
-  
+
   const options = {
     chat_id: message.chat.id,
     message_id: message.message_id,
@@ -286,22 +318,23 @@ async function saveUserProfile(chatId, userId, userState) {
     `;
 
     console.log('Profile saved successfully');
-    
+
     // Find matches
     const matches = await findMatches(userId, userState.skill, userState.availability);
-    
+
     if (matches.length > 0) {
       await notifyMatches(chatId, userId, userState.username, matches);
     } else {
-      await bot.sendMessage(chatId, `✅ Profile saved! 
+      await bot.sendMessage(chatId, `✅ Profile saved!
 
 I'll notify you when a player with matching skill level and availability joins.
 
 Use /mystatus to check your profile
 Use /remove to delete your data`);
     }
-    
-    userStates.delete(userId);
+
+    // Clear session after successful save
+    await deleteSession(userId);
   } catch (error) {
     console.error('Error saving profile:', error.message);
     console.error('Full error:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
@@ -318,13 +351,15 @@ async function findMatches(userId, skillLevel, availability) {
         AND skill_level = ${skillLevel}
         AND active = true
     `;
-    
+
     const matches = [];
-    
+
     for (const player of rows) {
-      const playerAvailability = JSON.parse(player.availability);
+      const playerAvailability = typeof player.availability === 'string'
+        ? JSON.parse(player.availability)
+        : player.availability;
       const commonSlots = availability.filter(slot => playerAvailability.includes(slot));
-      
+
       if (commonSlots.length > 0) {
         matches.push({
           telegram_id: player.telegram_id,
@@ -333,7 +368,7 @@ async function findMatches(userId, skillLevel, availability) {
         });
       }
     }
-    
+
     return matches;
   } catch (error) {
     console.error('Error finding matches:', error);
@@ -344,15 +379,15 @@ async function findMatches(userId, skillLevel, availability) {
 async function notifyMatches(chatId, userId, username, matches) {
   // Notify the current user
   let matchMessage = `🎾 Great news! Found ${matches.length} player(s) matching your level and schedule:\n\n`;
-  
+
   for (const match of matches) {
     const slotsFormatted = match.common_slots.map(slot => {
       const [day, time] = slot.split('_');
       return `${day} ${time}`;
     }).join(', ');
-    
+
     matchMessage += `👤 @${match.username}\n📅 Available: ${slotsFormatted}\n\n`;
-    
+
     // Notify the matched player
     try {
       const notifyMessage = `🎾 New match found!\n\n👤 @${username} matches your skill level and is available:\n📅 ${slotsFormatted}\n\nReach out to coordinate your game!`;
@@ -361,7 +396,7 @@ async function notifyMatches(chatId, userId, username, matches) {
       console.error(`Failed to notify player ${match.telegram_id}:`, error);
     }
   }
-  
+
   matchMessage += `Reach out to them to coordinate your games!`;
   await bot.sendMessage(chatId, matchMessage);
 }
@@ -373,19 +408,21 @@ async function statusCommand(chatId, userId) {
       FROM players
       WHERE telegram_id = ${userId}
     `;
-    
+
     if (rows.length === 0) {
       await bot.sendMessage(chatId, 'You don\'t have a profile yet. Send /start to create one!');
       return;
     }
-    
+
     const profile = rows[0];
-    const availability = JSON.parse(profile.availability);
+    const availability = typeof profile.availability === 'string'
+      ? JSON.parse(profile.availability)
+      : profile.availability;
     const availabilityFormatted = availability.map(slot => {
       const [day, time] = slot.split('_');
       return `${day} ${time}`;
     }).join('\n');
-    
+
     const statusMessage = `📊 Your Profile:
 
 🎯 Skill Level: ${profile.skill_level}
@@ -393,7 +430,7 @@ async function statusCommand(chatId, userId) {
 ${availabilityFormatted}
 
 Status: ${profile.active ? '✅ Active' : '⏸️ Inactive'}`;
-    
+
     await bot.sendMessage(chatId, statusMessage);
   } catch (error) {
     console.error('Error getting status:', error);
@@ -404,6 +441,7 @@ Status: ${profile.active ? '✅ Active' : '⏸️ Inactive'}`;
 async function removeCommand(chatId, userId) {
   try {
     await sql`DELETE FROM players WHERE telegram_id = ${userId}`;
+    await sql`DELETE FROM user_sessions WHERE telegram_id = ${userId}`;
     await bot.sendMessage(chatId, '✅ Your data has been completely removed from our system.');
   } catch (error) {
     console.error('Error removing user:', error);
@@ -412,6 +450,6 @@ async function removeCommand(chatId, userId) {
 }
 
 async function cancelCommand(chatId, userId) {
-  userStates.delete(userId);
+  await deleteSession(userId);
   await bot.sendMessage(chatId, 'Operation cancelled. Send /start when you\'re ready to try again.');
 }
