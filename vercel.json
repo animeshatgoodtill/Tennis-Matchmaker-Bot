@@ -3,9 +3,5 @@
     "api/webhook.js": {
       "maxDuration": 10
     }
-  },
-  "env": {
-    "TELEGRAM_BOT_TOKEN": "@telegram-bot-token",
-    "POSTGRES_URL": "@postgres-url"
   }
 }
