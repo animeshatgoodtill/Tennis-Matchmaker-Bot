@@ -152,9 +152,11 @@ async function updateCommand(chatId, userId, username) {
     return;
   }
 
+  // Preserve existing profile data in session for updates
   await setSession(userId, {
     step: 'update_menu',
-    username: username,
+    username: username || profile.username,
+    skill: profile.skill_level, // Keep existing skill level
     selectedDays: [],
     availability: []
   });
