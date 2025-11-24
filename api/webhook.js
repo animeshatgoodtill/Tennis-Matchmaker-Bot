@@ -104,7 +104,31 @@ async function handleMessage(message) {
     await removeCommand(chatId, userId);
   } else if (text === '/update') {
     await updateCommand(chatId, userId, message.from.username);
+  } else if (text === '/help') {
+    await helpCommand(chatId);
   }
+}
+
+async function helpCommand(chatId) {
+  const message = `🎾 *Tennis Matchmaker Bot*
+
+*Commands:*
+/start - Create or reset your profile
+/mystatus - View your current profile
+/update - Change skill level or availability
+/remove - Delete all your data
+/cancel - Cancel current operation
+/help - Show this help message
+
+*How it works:*
+1. Set your skill level (beginner to pro)
+2. Select days you're available
+3. Pick time slots for each day
+4. Get matched with players at your level!
+
+When a match is found, both players are notified with each other's contact info.`;
+
+  await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
 }
 
 async function startCommand(chatId, userId, username) {
@@ -312,6 +336,13 @@ async function handleCallbackQuery(callbackQuery) {
     await sql`UPDATE players SET skill_level = ${skill}, updated_at = NOW() WHERE telegram_id = ${userId}`;
     await deleteSession(userId);
     await bot.sendMessage(chatId, `✅ Skill level updated to ${skill}!`);
+
+  // === REMOVE CONFIRMATION ===
+  } else if (data === 'confirm_remove') {
+    await executeRemove(chatId, userId);
+
+  } else if (data === 'cancel_remove') {
+    await bot.sendMessage(chatId, 'Removal cancelled. Your data is safe.');
   }
 }
 
@@ -492,11 +523,15 @@ async function saveUserProfile(chatId, userId, userState) {
     } else {
       await bot.sendMessage(chatId, `✅ Profile saved!
 
-I'll notify you when a player with matching skill level and availability joins.
+No matches found yet - but don't worry! Players are joining regularly.
+
+💡 Tip: Adding more days or time slots increases your chances of finding a partner.
+
+I'll notify you automatically when someone with matching skill and availability joins.
 
 Commands:
 /mystatus - View your profile
-/update - Change skill level or availability
+/update - Expand your availability
 /remove - Delete your data`);
     }
 
@@ -626,6 +661,26 @@ Commands:
 }
 
 async function removeCommand(chatId, userId) {
+  const message = `⚠️ *Are you sure?*
+
+This will permanently delete your profile and all your data.`;
+
+  const options = {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '🗑️ Yes, delete my data', callback_data: 'confirm_remove' },
+          { text: '❌ Cancel', callback_data: 'cancel_remove' }
+        ]
+      ]
+    },
+    parse_mode: 'Markdown'
+  };
+
+  await bot.sendMessage(chatId, message, options);
+}
+
+async function executeRemove(chatId, userId) {
   try {
     await sql`DELETE FROM players WHERE telegram_id = ${userId}`;
     await sql`DELETE FROM user_sessions WHERE telegram_id = ${userId}`;
