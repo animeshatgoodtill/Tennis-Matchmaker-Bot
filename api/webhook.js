@@ -116,13 +116,18 @@ async function startCommand(chatId, userId, username) {
     availability: []
   });
 
-  const message = `🎾 Welcome to Widen Arena Vilnius Matchmaker Bot!
+  let message = `🎾 Welcome to Widen Arena Vilnius Matchmaker Bot!
 
 I'll help you find tennis partners at your skill level.
 
 To get started, I need your permission to share your Telegram username with matched players.
 
 Your data will be minimal and can be deleted anytime with /remove command.`;
+
+  // Warn if no username set
+  if (!username) {
+    message += `\n\n⚠️ Note: You don't have a Telegram username set. Matched players won't be able to contact you directly. Consider setting one in Telegram Settings.`;
+  }
 
   const options = {
     reply_markup: {
@@ -535,8 +540,18 @@ async function findMatches(userId, skillLevel, availability) {
   }
 }
 
+// Helper to format username display
+function formatUsername(username, telegramId) {
+  if (username) {
+    return `@${username}`;
+  }
+  return `Player ${String(telegramId).slice(-4)}`; // Last 4 digits as anonymous ID
+}
+
 async function notifyMatches(chatId, userId, username, matches) {
   let matchMessage = `🎾 Great news! Found ${matches.length} player(s) matching your level and schedule:\n\n`;
+
+  const currentUserDisplay = formatUsername(username, userId);
 
   for (const match of matches) {
     const slotsFormatted = match.common_slots.map(slot => {
@@ -544,10 +559,11 @@ async function notifyMatches(chatId, userId, username, matches) {
       return `${day} ${time}`;
     }).join(', ');
 
-    matchMessage += `👤 @${match.username}\n📅 Available: ${slotsFormatted}\n\n`;
+    const matchUserDisplay = formatUsername(match.username, match.telegram_id);
+    matchMessage += `👤 ${matchUserDisplay}\n📅 Available: ${slotsFormatted}\n\n`;
 
     try {
-      const notifyMessage = `🎾 New match found!\n\n👤 @${username} matches your skill level and is available:\n📅 ${slotsFormatted}\n\nReach out to coordinate your game!`;
+      const notifyMessage = `🎾 New match found!\n\n👤 ${currentUserDisplay} matches your skill level and is available:\n📅 ${slotsFormatted}\n\nReach out to coordinate your game!`;
       await bot.sendMessage(match.telegram_id, notifyMessage);
     } catch (error) {
       console.error(`Failed to notify player ${match.telegram_id}:`, error);
